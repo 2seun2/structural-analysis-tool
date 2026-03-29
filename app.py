@@ -1,99 +1,72 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import pyvista as pv
-from stpyvista import stpyvista
+import plotly.graph_objects as go
 
-# --- 1. MILL SPEC 데이터 연동 모듈 ---
+# --- 1. MILL SPEC 데이터 연동 ---
 def load_mill_spec(file):
     try:
-        # 엑셀 파일에서 Yield Strength(항복강도)와 Material Name을 읽어옴
         df = pd.read_excel(file)
-        # 예: 엑셀에 'Material', 'Yield_Strength_MPa' 컬럼이 있다고 가정
-        material_info = {
-            "name": df['Material'].iloc[0],
-            "yield_strength": float(df['Yield_Strength_MPa'].iloc[0])
-        }
-        return material_info
-    except Exception as e:
-        st.error(f"MILL SPEC 파일 형식 확인 필요: {e}")
+        # 엑셀 첫 번째 행에서 데이터 추출 시도
+        return {"name": df.iloc[0,0], "yield_strength": float(df.iloc[0,1])}
+    except:
         return None
 
-# --- 2. 3D 구조 설계 및 해석 시뮬레이션 (FEA 로직 대용) ---
-def perform_structural_analysis(length, width, thickness, load_kg, yield_strength):
-    # 하중 계산 (N = kg * 9.81)
+# --- 2. 구조 해석 및 안전율 계산 ---
+def calculate_analysis(L, W, T, load_kg, yield_str):
     force = load_kg * 9.81
-    
-    # 단순 보(Cantilever) 모델 기준 최대 응력 계산 (예시 수식)
-    # sigma = M * y / I
-    moment = force * length
-    i_moment = (width * (thickness**3)) / 12
-    max_stress = (moment * (thickness/2)) / i_moment / 1e6 # MPa 단위 변환
-    
-    safety_factor = yield_strength / max_stress if max_stress > 0 else 0
-    return round(max_stress, 2), round(safety_factor, 2)
+    moment = force * L
+    i_moment = (W * (T**3)) / 12
+    max_stress = (moment * (T/2)) / i_moment / 1e6 # MPa
+    sf = yield_str / max_stress if max_stress > 0 else 0
+    return round(max_stress, 2), round(sf, 2)
 
-# --- 3. Streamlit UI 구성 ---
-st.set_page_config(layout="wide")
-st.title("🏗️ Pro-Grade 3D 구조해석 & MILL SPEC 연동 툴")
+# --- 3. UI 구성 ---
+st.set_page_config(page_title="구조해석 시뮬레이터", layout="wide")
+st.title("🏗️ 기구개발용 3D 구조해석 툴")
 
 with st.sidebar:
-    st.header("1. 재료 정보 입력 (MILL SPEC)")
-    uploaded_file = st.file_uploader("제작처 성적서 업로드 (Excel)", type=["xlsx"])
+    st.header("1. 재료 및 하중 설정")
+    uploaded_file = st.file_uploader("MILL SPEC 업로드 (Excel)", type=["xlsx"])
+    y_input = st.number_input("항복강도(MPa) 직접 입력", value=250.0)
     
-    if uploaded_file:
-        mat_data = load_mill_spec(uploaded_file)
-        if mat_data:
-            st.success(f"재질 확인: {mat_data['name']}")
-            yield_str = st.number_input("항복강도(MPa)", value=mat_data['yield_strength'])
-        else:
-            yield_str = st.number_input("항복강도(MPa) 수동 입력", value=250.0)
-    else:
-        yield_str = st.number_input("항복강도(MPa) 수동 입력", value=250.0)
+    st.header("2. 설계 치수 (mm)")
+    L = st.slider("길이 (L)", 100, 1000, 500)
+    W = st.slider("폭 (W)", 10, 300, 50)
+    T = st.slider("두께 (T)", 1, 50, 5)
+    load = st.number_input("하중 (kg)", value=165)
 
-    st.header("2. 기구 설계 파라미터 (mm)")
-    L = st.slider("길이 (L)", 100, 2000, 500)
-    W = st.slider("폭 (W)", 10, 500, 50)
-    T = st.slider("두께 (T)", 1, 100, 5)
-    
-    st.header("3. 구속 및 하중 조건")
-    load = st.number_input("적용 하중 (kg)", value=165)
+# 해석 결과 계산
+stress, sf = calculate_analysis(L, W, T, load, y_input)
 
-# --- 4. 메인 화면: 3D 시각화 및 결과 ---
+# --- 4. 메인 화면 ---
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.subheader("3.D 구조 설계 Preview (Von-Mises Stress Distribution)")
-    
-    # PyVista를 이용한 3D 모델 생성
-    mesh = pv.Box(bounds=(0, L, 0, W, 0, T))
-    
-    # 해석 결과 계산
-    stress, sf = perform_structural_analysis(L, W, T, load, yield_str)
-    
-    # 가상의 응력 분포 데이터 생성 (끝단으로 갈수록 응력이 높아지는 시각화)
-    stress_values = np.linspace(0, stress, mesh.n_points)
-    mesh.point_data["Stress (MPa)"] = stress_values
-    
-    # 3D 렌더링 설정
-    plotter = pv.Plotter(window_size=[600, 400])
-    plotter.add_mesh(mesh, scalars="Stress (MPa)", cmap="jet", show_edges=True)
-    plotter.add_scalar_bar(title="Stress (MPa)")
-    plotter.background_color = "white"
-    plotter.view_isometric()
-    
-    # Streamlit에 3D 모델 표시
-    stpyvista(plotter)
+    st.subheader("3D 구조 시각화")
+    # Plotly를 이용한 3D 박스 그리기 (에러가 거의 없음)
+    fig = go.Figure(data=[go.Mesh3d(
+        x=[0, L, L, 0, 0, L, L, 0],
+        y=[0, 0, W, W, 0, 0, W, W],
+        z=[0, 0, 0, 0, T, T, T, T],
+        i=[7, 0, 0, 0, 4, 4, 6, 6, 4, 0, 3, 2],
+        j=[3, 4, 1, 2, 5, 6, 5, 2, 0, 1, 6, 3],
+        k=[0, 7, 2, 3, 6, 7, 1, 1, 5, 5, 7, 6],
+        intensity=np.linspace(0, stress, 8),
+        colorscale='Jet',
+        showscale=True
+    )])
+    fig.update_layout(scene=dict(aspectmode='data'))
+    st.plotly_chart(fig, use_container_width=True)
 
 with col2:
-    st.subheader("해석 결과 요약")
-    st.metric("최대 발생 응력", f"{stress} MPa")
-    
-    if sf < 1.0:
-        st.error(f"안전율: {sf} (위험: 설계 변경 권장)")
-    elif sf < 1.5:
-        st.warning(f"안전율: {sf} (주의: 보강 필요 가능성)")
+    st.subheader("해석 리포트")
+    st.metric("최대 응력", f"{stress} MPa")
+    if sf < 1.2:
+        st.error(f"안전율: {sf} (위험!)")
+    elif sf < 2.0:
+        st.warning(f"안전율: {sf} (보강 권장)")
     else:
         st.success(f"안전율: {sf} (안전)")
-
-    st.info(f"계산 근거: {yield_str}MPa 항복강도 대비 하중 {load}kg 적용 시 굽힘 응력 해석 결과")
+    
+    st.write(f"현재 설계는 **{load}kg** 하중에서 **{y_input}MPa**의 재질을 견디도록 계산되었습니다.")
