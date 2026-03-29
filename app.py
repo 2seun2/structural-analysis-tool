@@ -2,121 +2,112 @@ import streamlit as st
 import numpy as np
 import plotly.graph_objects as go
 
-# --- 1. 소재 데이터베이스 (Plastic & Press) ---
+# --- 소재 물성치 DB (항복강도 MPa, 탄성계수 GPa) ---
 MATERIAL_DB = {
-    "Plastic (사출)": {
-        "PC+ABS": {"yield_strength": 50, "modulus": 2400},
-        "ABS": {"yield_strength": 40, "modulus": 2100},
-        "PA66 (GF30%)": {"yield_strength": 110, "modulus": 6000},
-        "HIPS": {"yield_strength": 25, "modulus": 2000},
+    "Metal (Press/CNC)": {
+        "SUS304": {"yield": 205, "E": 193},
+        "SECC (GI)": {"yield": 270, "E": 210},
+        "AL6061-T6": {"yield": 275, "E": 69},
+        "SPCC": {"yield": 240, "E": 200},
     },
-    "Press (금속)": {
-        "SECC (아연도금강판)": {"yield_strength": 270, "modulus": 210000},
-        "SUS304": {"yield_strength": 205, "modulus": 193000},
-        "SPCC (냉연강판)": {"yield_strength": 240, "modulus": 205000},
-        "AL6061-T6": {"yield_strength": 275, "modulus": 68900},
+    "Plastic (Injection)": {
+        "PC+ABS": {"yield": 55, "E": 2.4},
+        "PA66+GF30": {"yield": 110, "E": 6.5},
+        "ABS": {"yield": 40, "E": 2.1},
     }
 }
 
-# --- 2. 화면 설정 (최대한 크게) ---
-st.set_page_config(page_title="Pro-Mech Structure Analyzer", layout="wide")
-st.title("🏗️ 기구설계 전문가용 구조해석 시뮬레이터")
+st.set_page_config(page_title="Mechanical Design Validator", layout="wide")
+st.title("🛡️ 기구 설계 안전성 검증 시스템 (Structure & Fastener)")
 
-# --- 3. 사이드바 설정 ---
+# --- 사이드바: 파라미터 입력 ---
 with st.sidebar:
-    st.header("1. 형상 및 치수 설정")
-    shape_type = st.selectbox("형상 선택", ["평판(Plate)", "L-Angle", "사각 파이프(Square Pipe)"])
+    st.header("1. 기본 구조 설계")
+    shape = st.selectbox("형상", ["Plate", "Square Pipe", "L-Angle"])
+    L = st.number_input("길이 (L, mm)", value=300)
+    W = st.number_input("폭/높이 (W, mm)", value=50)
+    T = st.number_input("두께 (T, mm)", value=2.0, format="%.2f")
     
-    col_l, col_w = st.columns(2)
-    with col_l: L = st.number_input("길이 (L, mm)", value=500)
-    with col_w: W = st.number_input("폭/높이 (W, mm)", value=50)
-    T = st.number_input("두께 (T, mm)", value=2.0, step=0.1)
+    st.header("2. 체결부 설정 (Screw/Bolt)")
+    bolt_size = st.selectbox("볼트 규격", ["M3", "M4", "M5", "M6", "M8"])
+    bolt_qty = st.number_input("볼트 수량 (ea)", min_value=1, value=2)
+    # 볼트 유효 단면적 (mm^2)
+    bolt_area_map = {"M3": 5.03, "M4": 8.78, "M5": 14.2, "M6": 20.1, "M8": 36.6}
+    
+    st.header("3. 소재 및 하중")
+    cat = st.selectbox("소재 분류", list(MATERIAL_DB.keys()))
+    mat = st.selectbox("상세 강종", list(MATERIAL_DB[cat].keys()))
+    load_kg = st.number_input("인가 하중 (Total Load, kg)", value=100)
+    
+    analyze_btn = st.button("🔍 전단 및 구조 정밀 해석 시작", type="primary", use_container_width=True)
 
-    st.header("2. 소재 선택")
-    category = st.selectbox("소재 분류", list(MATERIAL_DB.keys()))
-    material = st.selectbox("세부 강종", list(MATERIAL_DB[category].keys()))
-    selected_yield = MATERIAL_DB[category][material]["yield_strength"]
+# --- 해석 로직 ---
+if analyze_btn:
+    yield_str = MATERIAL_DB[cat][mat]["yield"]
+    E_modulus = MATERIAL_DB[cat][mat]["E"] * 1000 # MPa 변환
+    force_n = load_kg * 9.81
     
-    st.header("3. 구속 및 하중")
-    support_type = st.radio("구속 조건", ["외팔보 (Cantilever)", "양단 지지 (Both Ends)"])
-    load_kg = st.number_input("적용 하중 (kg)", value=100)
+    # [1] 구조 굽힘 응력 (Bending Stress)
+    # 단순화를 위해 외팔보(Cantilever) 최악 조건 가정
+    if shape == "Plate": I = (W * T**3) / 12; Z = (W * T**2) / 6
+    elif shape == "Square Pipe": I = (W**4 - (W-2*T)**4) / 12; Z = I / (W/2)
+    else: I = (T * W**3 / 12) + (W * T**3 / 12); Z = I / (W/2)
     
+    bending_moment = force_n * L
+    bending_stress = bending_moment / Z
+    
+    # [2] 체결부 전단 응력 (Shear Stress)
+    # 하중이 볼트에 균일하게 분산된다고 가정 (Shear = Force / (Area * Qty))
+    bolt_area = bolt_area_map[bolt_size]
+    shear_stress = force_n / (bolt_area * bolt_qty)
+    
+    # 허용 전단 응력 (보통 항복강도의 60% 수준)
+    allowable_shear = yield_str * 0.6
+    
+    # --- 결과 화면 ---
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📍 구조 해석 결과 (Bending)")
+        st.metric("발생 응력", f"{round(bending_stress, 1)} MPa")
+        sf_bending = yield_str / bending_stress
+        if sf_bending > 2: st.success(f"구조 안전 (S.F: {round(sf_bending, 2)})")
+        else: st.error(f"구조 취약 (S.F: {round(sf_bending, 2)})")
+
+    with col2:
+        st.subheader("🔩 체결부 해석 결과 (Shear)")
+        st.metric("볼트 전단 응력", f"{round(shear_stress, 1)} MPa")
+        sf_shear = allowable_shear / shear_stress
+        if sf_shear > 2: st.success(f"체결 안전 (S.F: {round(sf_shear, 2)})")
+        else: st.error(f"볼트 파손 위험 (S.F: {round(sf_shear, 2)})")
+
+    # [3] 시각화 (Plotly 3D)
     st.divider()
-    run_analysis = st.button("🚀 구조해석 시작", use_container_width=True, type="primary")
-
-# --- 4. 구조 계산 로직 ---
-def run_fea(L, W, T, load_kg, yield_str, shape, support):
-    force = load_kg * 9.81
+    st.subheader("📊 응력 분포 시각화 (Bending Line)")
     
-    # 단면계수(Z) 및 관성모멘트(I) 간이 계산 (형상별)
-    if shape == "평판(Plate)":
-        I = (W * T**3) / 12
-        Z = (W * T**2) / 6
-    elif shape == "L-Angle":
-        # 단순화된 L형강 계산
-        I = (T * W**3 / 12) + (W * T**3 / 12) 
-        Z = I / (W/2)
-    else: # 사각 파이프
-        I = (W**4 - (W-2*T)**4) / 12
-        Z = I / (W/2)
-
-    # 굽힘 모멘트 및 응력
-    if support == "외팔보 (Cantilever)":
-        max_moment = force * L
-        deflection_factor = (force * L**3) / (3 * 210000 * I) # 간이 변위
-    else:
-        max_moment = (force * L) / 4
-        deflection_factor = (force * L**3) / (48 * 210000 * I)
-
-    max_stress = max_moment / Z / 1e3 # KPa -> MPa 변환 보정
-    sf = yield_str / max_stress if max_stress > 0 else 0
-    return round(max_stress, 2), round(sf, 2), deflection_factor
-
-# --- 5. 결과 시각화 (Main Area) ---
-if run_analysis:
-    stress, sf, deform = run_fea(L, W, T, load_kg, selected_yield, shape_type, support_type)
+    # 변형 형상 계산
+    x_plot = np.linspace(0, L, 50)
+    # y = (F*x^2)/(6*E*I) * (3L - x) -> 외팔보 처짐 공식
+    deflection = (force_n * x_plot**2) / (6 * E_modulus * I) * (3*L - x_plot)
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("최대 발생 응력", f"{stress} MPa")
-    c2.metric("안전율 (S.F)", f"{sf}")
-    c3.metric("선택 소재", material)
-
-    # 3D 시각화 (Bending 시뮬레이션)
-    st.subheader(f"📊 {shape_type} 굽힘/변형 시각화")
+    fig = go.Figure()
+    # 원본 형상
+    fig.add_trace(go.Scatter(x=x_plot, y=np.zeros(50), name="Original", line=dict(dash='dash', color='gray')))
+    # 변형 형상 (가독성을 위해 5배 과장)
+    fig.add_trace(go.Scatter(x=x_plot, y=-deflection * 5, name="Deformed (x5)", 
+                             line=dict(width=4, color='red'), mode='lines+markers'))
     
-    # 격자 생성 (변형 시각화용)
-    x = np.linspace(0, L, 20)
-    y = np.linspace(0, W, 5)
-    X, Y = np.meshgrid(x, y)
-    
-    # 구속 조건에 따른 변형 형상 함수 생성
-    if support_type == "외팔보 (Cantilever)":
-        Z_deform = -(stress/100) * (X**2 / L) # 시각적 과장 포함
-    else:
-        Z_deform = -(stress/100) * (4 * X * (L - X) / L)
-
-    fig = go.Figure(data=[go.Surface(x=X, y=Y, z=Z_deform, colorscale='Jet', 
-                                    colorbar_title="Stress Level")])
-    
-    fig.update_layout(
-        title=f"하중 인가 시 {shape_type} 변형 예상도 (과장 표현됨)",
-        scene=dict(
-            xaxis_title='Length (mm)',
-            yaxis_title='Width (mm)',
-            zaxis_title='Deformation',
-            aspectratio=dict(x=2, y=0.5, z=0.5)
-        ),
-        margin=dict(l=0, r=0, b=0, t=40),
-        height=600
-    )
+    fig.update_layout(title="하중에 따른 구조물 처짐(Deflection) 예상 라인",
+                      xaxis_title="Length (mm)", yaxis_title="Deflection (mm)", height=400)
     st.plotly_chart(fig, use_container_width=True)
 
-    if sf < 1.0:
-        st.error("❌ 현재 설계는 파손 위험이 매우 높습니다. 두께를 키우거나 강종을 변경하세요.")
-    elif sf < 1.5:
-        st.warning("⚠️ 안전율이 낮습니다. 실제 환경에서는 보강이 필요할 수 있습니다.")
-    else:
-        st.success("✅ 구조적으로 안전한 설계입니다.")
-
+    # [4] 전문가 한마디 (Insight)
+    st.info(f"""
+    **🔍 엔지니어링 검토 의견:**
+    1. **구조물:** 현재 {mat} 재질의 {shape} 형상은 하중 지지 시 최대 {round(bending_stress, 1)}MPa의 응력이 발생합니다.
+    2. **체결부:** {bolt_size} 볼트 {bolt_qty}개는 {round(shear_stress, 1)}MPa의 전단력을 받습니다. 
+    3. **결론:** {"설계 통과" if (sf_bending > 1.5 and sf_shear > 1.5) else "재설계 필요"}. 
+       볼트 등급이 4.8일 경우 전단 항복은 낮으므로 8.8 또는 10.9 고장력 볼트 사용을 고려하십시오.
+    """)
 else:
-    st.info("왼쪽 사이드바에서 치수와 하중을 입력한 후 '구조해석 시작' 버튼을 눌러주세요.")
+    st.warning("왼쪽의 파라미터를 확인하고 '해석 시작' 버튼을 눌러주세요.")
